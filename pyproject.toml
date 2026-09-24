@@ -1,9 +1,12 @@
 [project]
 name = "sec_sentiment_rag"
 version = "0.0.1"
-authors = [{ name = "miprie04@ucm.es" }]
+authors = [{ name = "miguel-prto" }]
 requires-python = ">=3.10,<3.13"
 dependencies = [
+    "python-dotenv>=1.0",
+    "beautifulsoup4>=4.12",
+    "regex>=2024.11.6",
     # Any dependencies for jobs and pipelines in this project can be added here
     # See also https://docs.databricks.com/dev-tools/bundles/library-dependencies
     #
@@ -16,7 +19,7 @@ dev = [
     "pytest",
     "ruff",
     "databricks-dlt",
-    "databricks-connect>=15.4,<15.5",
+    "databricks-connect==16.1.7",
     "ipykernel",
 ]
 
