@@ -16,7 +16,6 @@ st.set_page_config(
     layout="wide"
 )
 
-# 3. Cache Model & Databricks Clients to avoid re-initializing on every rerun
 @st.cache_resource
 def init_clients():
     vsc = VectorSearchClient()
