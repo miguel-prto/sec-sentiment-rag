@@ -16,6 +16,7 @@ st.set_page_config(
     layout="wide"
 )
 
+# Cache models
 @st.cache_resource
 def init_clients():
     vsc = VectorSearchClient()
@@ -25,17 +26,34 @@ def init_clients():
 
 vsc, w, embedder = init_clients()
 
-# Configuration Constants
 CATALOG = "financial_db"
-SCHEMA = "default"
+SCHEMA = "filings"
 INDEX_NAME = f"{CATALOG}.{SCHEMA}.sec_gold_vector_index"
 ENDPOINT_NAME = "financial_rag_endpoint"
 LLM_ENDPOINT = "databricks-meta-llama-3-70b-instruct" # Standard Databricks Foundation Model Endpoint
+GOLD_TABLE = f"{CATALOG}.{SCHEMA}.sec_rag_gold"
 
-# -----------------------------------------------------------------------------
-# SIDEBAR CONTROLS
-# -----------------------------------------------------------------------------
-st.sidebar.title("⚙️ RAG Configuration")
+# For getting chunk context
+def expand_chunk_context(spark, accession_number: str, matched_chunk_index: int, window_size: int = 1) -> str:
+    # Fetches the chunk and a window before and after it
+    min_idx = max(0, matched_chunk_index - window_size)
+    max_idx = matched_chunk_index + window_size
+
+    # Query Gold table for the range of chunks within the same filing
+    df_window = spark.sql(f"""
+        SELECT chunk_index, chunk_text
+        FROM {GOLD_TABLE}
+        WHERE accession_number = '{accession_number}'
+          AND chunk_index BETWEEN {min_idx} AND {max_idx}
+        ORDER BY chunk_index ASC
+    """).collect()
+
+    # Concatenate text blocks in natural sequential order
+    merged_text = "\n\n".join([row["chunk_text"] for row in df_window])
+    return merged_text
+
+# Sidebar
+st.sidebar.title("RAG Configuration")
 ticker_filter = st.sidebar.text_input("Filter by Ticker (Optional)", value="AAPL")
 top_k = st.sidebar.slider("Number of Chunks to Retrieve (Top K)", min_value=1, max_value=10, value=4)
 
@@ -48,26 +66,23 @@ st.sidebar.info("""
 - **Databricks Vector Search** Index
 """)
 
-# -----------------------------------------------------------------------------
-# MAIN APP INTERFACE
-# -----------------------------------------------------------------------------
-st.title("📈 SEC 10-K RAG & Sentiment Analysis Engine")
+# Interface
+st.title("SEC 10-K RAG & Sentiment Analysis Engine")
 st.caption("Ask natural language questions across SEC filings with FinBERT sentiment attribution.")
 
-# Initialize Chat History
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# Display prior chat messages
+# Display prior messages
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
         if "retrieved_docs" in msg:
-            with st.expander("🔍 View Retrieved 10-K Sources & FinBERT Scores"):
+            with st.expander("View Retrieved 10-K Sources & FinBERT Scores"):
                 for doc in msg["retrieved_docs"]:
                     st.json(doc)
 
-# Handle User Input
+# User input
 if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., foreign exchange risks, supply chain delays)..."):
     
     # 1. Show user message in chat
@@ -77,7 +92,7 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
 
     # 2. Vector Search Retrieval
     with st.chat_message("assistant"):
-        with st.status("🔍 Searching SEC Vector Search Index...", expanded=False) as status:
+        with st.status("Searching SEC Vector Search Index...", expanded=False) as status:
             
             # Embed user question
             query_vector = embedder.encode(user_query, normalize_embeddings=True).tolist()
@@ -93,7 +108,7 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
                 query_vector=query_vector,
                 columns=[
                     "ticker", 
-                    "filing_date", 
+                    "date", 
                     "accession_number", 
                     "chunk_index", 
                     "chunk_text", 
@@ -116,12 +131,12 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
             structured_docs = []
             
             for i, doc in enumerate(docs, 1):
-                ticker, filing_date, accession, chunk_idx, text, sent_label, sent_neg, sent_pos = doc
+                ticker, date, accession, chunk_idx, text, sent_label, sent_neg, sent_pos = doc
                 
                 doc_info = {
                     "source_num": i,
                     "ticker": ticker,
-                    "filing_date": filing_date,
+                    "date": date,
                     "chunk_index": chunk_idx,
                     "sentiment": sent_label,
                     "negative_probability": round(sent_neg, 4),
@@ -129,7 +144,7 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
                 }
                 structured_docs.append(doc_info)
                 
-                context_str += f"\n[SOURCE {i}] Ticker: {ticker} | Date: {filing_date} | FinBERT Sentiment: {sent_label} (Neg Prob: {sent_neg:.2f})\nExcerpt: {text}\n"
+                context_str += f"\n[SOURCE {i}] Ticker: {ticker} | Date: {date} | FinBERT Sentiment: {sent_label} (Neg Prob: {sent_neg:.2f})\nExcerpt: {text}\n"
 
             prompt = f"""You are a senior financial analyst. Answer the user's question using ONLY the provided SEC 10-K excerpts. 
 Cite source numbers [SOURCE X] for every fact or claim you make.
