@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from databricks.ai_search.client import VectorSearchClient
 from databricks.sdk import WorkspaceClient
 from sentence_transformers import SentenceTransformer
+import requests
 
 load_dotenv()
 
@@ -24,33 +25,66 @@ def init_clients():
     embedder = SentenceTransformer("BAAI/bge-small-en-v1.5")
     return vsc, w, embedder
 
+@st.cache_resource
+def get_workspace_client():
+    return WorkspaceClient()
+
+w = get_workspace_client()
+
+def get_merged_window_sql(accession: str, center_idx: int) -> str:
+    min_idx = max(0, center_idx - 1)
+    max_idx = center_idx + 1
+    
+    query = f"""
+        SELECT chunk_text 
+        FROM financial_db.default.sec_rag_gold 
+        WHERE accession_number = '{accession}' 
+          AND chunk_index BETWEEN {min_idx} AND {max_idx}
+        ORDER BY chunk_index ASC
+    """
+
+    response = w.statement_execution.execute_statement(
+        statement=query,
+        warehouse_id=os.getenv("DATABRICKS_SQL_WAREHOUSE_ID")
+    )
+    
+    rows = response.result.data_array if response.result else []
+    clean_chunks = [r[0].strip() for r in rows if r[0]]
+    
+    return " ".join(clean_chunks)
+
+def query_databricks_llm(prompt: str) -> str:
+    host = os.getenv("DATABRICKS_HOST").rstrip("/")
+    token = os.getenv("DATABRICKS_TOKEN")
+    
+    url = f"{host}/serving-endpoints/{LLM_ENDPOINT}/invocations"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messages": [
+            {"role": "system", "content": "You are a helpful financial analyst assistant."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.1,
+        "max_tokens": 800
+    }
+    
+    resp = requests.post(url, headers=headers, json=payload)
+    resp.raise_for_status()
+    data = resp.json()
+    
+    return data["choices"][0]["message"]["content"]
+
 vsc, w, embedder = init_clients()
 
 CATALOG = "financial_db"
 SCHEMA = "filings"
 INDEX_NAME = f"{CATALOG}.{SCHEMA}.sec_gold_vector_index"
 ENDPOINT_NAME = "financial_rag_endpoint"
-LLM_ENDPOINT = "databricks-meta-llama-3-70b-instruct" # Standard Databricks Foundation Model Endpoint
+LLM_ENDPOINT = "databricks-gpt-oss-120b"
 GOLD_TABLE = f"{CATALOG}.{SCHEMA}.sec_rag_gold"
-
-# For getting chunk context
-def expand_chunk_context(spark, accession_number: str, matched_chunk_index: int, window_size: int = 1) -> str:
-    # Fetches the chunk and a window before and after it
-    min_idx = max(0, matched_chunk_index - window_size)
-    max_idx = matched_chunk_index + window_size
-
-    # Query Gold table for the range of chunks within the same filing
-    df_window = spark.sql(f"""
-        SELECT chunk_index, chunk_text
-        FROM {GOLD_TABLE}
-        WHERE accession_number = '{accession_number}'
-          AND chunk_index BETWEEN {min_idx} AND {max_idx}
-        ORDER BY chunk_index ASC
-    """).collect()
-
-    # Concatenate text blocks in natural sequential order
-    merged_text = "\n\n".join([row["chunk_text"] for row in df_window])
-    return merged_text
 
 # Sidebar
 st.sidebar.title("RAG Configuration")
@@ -123,75 +157,72 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
             docs = search_results.get("result", {}).get("data_array", [])
             status.update(label=f" Found {len(docs)} relevant 10-K risk factor chunks!", state="complete")
 
-        if not docs:
-            st.warning("No relevant filings found matching your query or filter.")
-        else:
-            # 3. Format Prompt for LLM
-            context_str = ""
-            structured_docs = []
-            
-            for i, doc in enumerate(docs, 1):
-                ticker, date, accession, chunk_idx, text, sent_label, sent_neg, sent_pos = doc
-                
-                doc_info = {
-                    "source_num": i,
-                    "ticker": ticker,
-                    "date": date,
-                    "chunk_index": chunk_idx,
-                    "sentiment": sent_label,
-                    "negative_probability": round(sent_neg, 4),
-                    "excerpt": text
-                }
-                structured_docs.append(doc_info)
-                
-                context_str += f"\n[SOURCE {i}] Ticker: {ticker} | Date: {date} | FinBERT Sentiment: {sent_label} (Neg Prob: {sent_neg:.2f})\nExcerpt: {text}\n"
+            if not docs:
+                st.warning("No relevant filings found matching your query or filter.")
+            else:
+                # 3. Format Prompt for LLM
+                context_str = ""
+                structured_docs = []
 
-            prompt = f"""You are a senior financial analyst. Answer the user's question using ONLY the provided SEC 10-K excerpts. 
-Cite source numbers [SOURCE X] for every fact or claim you make.
+                for i, doc in enumerate(docs, 1):
+                    ticker, date, accession, chunk_idx, raw_text, sent_label, sent_neg, sent_pos = doc[:8]
+                    
+                    # Fetch adjacent window text from our pre-fetched Spark result
+                    merged_window_text = get_merged_window_sql(accession, chunk_idx)
+                    final_text = merged_window_text if merged_window_text else raw_text
+                    
+                    doc_info = {
+                        "source_num": i,
+                        "ticker": ticker,
+                        "date": date,
+                        "accession_number": accession,
+                        "center_chunk_index": chunk_idx,
+                        "sentiment": sent_label,
+                        "negative_probability": round(sent_neg, 4),
+                        "excerpt": final_text
+                    }
+                    structured_docs.append(doc_info)
+                    
+                    context_str += (
+                        f"\n[SOURCE {i}] Ticker: {ticker} | Date: {date} | "
+                        f"Filing ID: {accession} (Window centered around Chunk {chunk_idx}) | "
+                        f"FinBERT Sentiment: {sent_label} (Neg Prob: {sent_neg:.2f})\n"
+                        f"Excerpt:\n{final_text}\n"
+                    )
 
-USER QUESTION:
-{user_query}
+                prompt = f"""You are a senior financial analyst. Answer the user's question using ONLY the provided SEC 10-K excerpts. 
+                Cite source numbers [SOURCE X] for every fact or claim you make.
 
-SEC 10-K CONTEXT:
-{context_str}
-"""
+                USER QUESTION:
+                {user_query}
 
-            # 4. Stream LLM Response using Databricks Foundation Model Serving
-            try:
-                response = w.serving_endpoints.query(
-                    name=LLM_ENDPOINT,
-                    messages=[
-                        {"role": "system", "content": "You are a helpful financial analyst assistant."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.1,
-                    max_tokens=800
-                )
-                
-                llm_answer = response.choices[0].message.content
-                st.markdown(llm_answer)
+                SEC 10-K CONTEXT:
+                {context_str}
+                """
 
-                # 5. Render Expandable Sources & FinBERT Metrics
-                with st.expander("📊 Inspect Retrieved Evidence & FinBERT Sentiment Analysis"):
-                    for doc in structured_docs:
-                        col1, col2 = st.columns([3, 1])
-                        with col1:
-                            st.markdown(f"**Source [{doc['source_num']}] — Ticker: {doc['ticker']} ({doc['filing_date']})**")
-                            st.caption(doc["excerpt"])
-                        with col2:
-                            st.metric(
-                                label="FinBERT Label", 
-                                value=doc["sentiment"].upper(),
-                                delta=f"-{doc['negative_probability']*100:.1f}% Neg Risk" if doc["sentiment"] == "negative" else "Normal"
-                            )
-                        st.divider()
-
-                # Save response to chat history
-                st.session_state.messages.append({
-                    "role": "assistant", 
-                    "content": llm_answer,
-                    "retrieved_docs": structured_docs
-                })
-
-            except Exception as e:
-                st.error(f"Failed to query LLM Endpoint '{LLM_ENDPOINT}': {str(e)}")
+                # 4. Stream LLM Response using Databricks Foundation Model Serving
+                try:                   
+                    llm_answer = query_databricks_llm(prompt)
+                    st.markdown(llm_answer)
+                    # 5. Render Expandable Sources & FinBERT Metrics
+                    with st.expander("Inspect Retrieved Evidence & FinBERT Sentiment Analysis"):
+                        for doc in structured_docs:
+                            col1, col2 = st.columns([3, 1])
+                            with col1:
+                                st.markdown(f"**Source [{doc['source_num']}] — Ticker: {doc['ticker']} ({doc['date']})**")
+                                st.caption(doc["excerpt"])
+                            with col2:
+                                st.metric(
+                                    label="FinBERT Label", 
+                                    value=doc["sentiment"].upper(),
+                                    delta=f"-{doc['negative_probability']*100:.1f}% Neg Risk" if doc["sentiment"] == "negative" else "Normal"
+                                )
+                            st.divider()
+                    # Save response to chat history
+                    st.session_state.messages.append({
+                        "role": "assistant", 
+                        "content": llm_answer,
+                        "retrieved_docs": structured_docs
+                    })
+                except Exception as e:
+                    st.error(f"Failed to query LLM Endpoint '{LLM_ENDPOINT}': {str(e)}")
