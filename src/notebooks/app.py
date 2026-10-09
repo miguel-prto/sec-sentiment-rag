@@ -67,15 +67,32 @@ def query_databricks_llm(prompt: str) -> str:
             {"role": "system", "content": "You are a helpful financial analyst assistant."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.1,
-        "max_tokens": 800
+        "temperature": 0.1
     }
     
     resp = requests.post(url, headers=headers, json=payload)
     resp.raise_for_status()
     data = resp.json()
     
-    return data["choices"][0]["message"]["content"]
+    message_content = data["choices"][0]["message"]["content"]
+
+    text = ""
+    reasoning = []
+
+    if isinstance(message_content, list):
+        for block in message_content:
+            if block.get("type") == "text":
+                text += block.get("text", "")
+                
+            elif block.get("type") == "reasoning":
+                if "summary" in block:
+                    for sub_block in block["summary"]:
+                        if sub_block.get("type") == "summary_text":
+                            reasoning.append(sub_block.get("text", ""))
+                elif "reasoning_text" in block:
+                    reasoning.append(block.get("reasoning_text", ""))
+
+    return text, reasoning
 
 vsc, w, embedder = init_clients()
 
@@ -157,55 +174,58 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
             docs = search_results.get("result", {}).get("data_array", [])
             status.update(label=f" Found {len(docs)} relevant 10-K risk factor chunks!", state="complete")
 
-            if not docs:
-                st.warning("No relevant filings found matching your query or filter.")
-            else:
-                # 3. Format Prompt for LLM
-                context_str = ""
-                structured_docs = []
+        if not docs:
+            st.warning("No relevant filings found matching your query or filter.")
+        else:
+            # 3. Format Prompt for LLM
+            context_str = ""
+            structured_docs = []
 
-                for i, doc in enumerate(docs, 1):
-                    ticker, date, accession, chunk_idx, raw_text, sent_label, sent_neg, sent_pos = doc[:8]
-                    
-                    # Fetch adjacent window text from our pre-fetched Spark result
-                    merged_window_text = get_merged_window_sql(accession, chunk_idx)
-                    final_text = merged_window_text if merged_window_text else raw_text
-                    
-                    doc_info = {
-                        "source_num": i,
-                        "ticker": ticker,
-                        "date": date,
-                        "accession_number": accession,
-                        "center_chunk_index": chunk_idx,
-                        "sentiment": sent_label,
-                        "negative_probability": round(sent_neg, 4),
-                        "excerpt": final_text
-                    }
-                    structured_docs.append(doc_info)
-                    
-                    context_str += (
-                        f"\n[SOURCE {i}] Ticker: {ticker} | Date: {date} | "
-                        f"Filing ID: {accession} (Window centered around Chunk {chunk_idx}) | "
-                        f"FinBERT Sentiment: {sent_label} (Neg Prob: {sent_neg:.2f})\n"
-                        f"Excerpt:\n{final_text}\n"
-                    )
+            for i, doc in enumerate(docs, 1):
+                ticker, date, accession, chunk_idx, raw_text, sent_label, sent_neg, sent_pos = doc[:8]
+                
+                # Fetch adjacent window text from our pre-fetched Spark result
+                merged_window_text = get_merged_window_sql(accession, chunk_idx)
+                final_text = merged_window_text if merged_window_text else raw_text
+                
+                doc_info = {
+                    "source_num": i,
+                    "ticker": ticker,
+                    "date": date,
+                    "accession_number": accession,
+                    "center_chunk_index": chunk_idx,
+                    "sentiment": sent_label,
+                    "negative_probability": round(sent_neg, 4),
+                    "excerpt": final_text
+                }
+                structured_docs.append(doc_info)
+                
+                context_str += (
+                    f"\n[SOURCE {i}] Ticker: {ticker} | Date: {date} | "
+                    f"Filing ID: {accession} (Window centered around Chunk {chunk_idx}) | "
+                    f"FinBERT Sentiment: {sent_label} (Neg Prob: {sent_neg:.2f})\n"
+                    f"Excerpt:\n{final_text}\n"
+                )
 
-                prompt = f"""You are a senior financial analyst. Answer the user's question using ONLY the provided SEC 10-K excerpts. 
-                Cite source numbers [SOURCE X] for every fact or claim you make.
+            prompt = f"""You are a senior financial analyst. Answer the user's question using ONLY the provided SEC 10-K excerpts. 
+            Cite source numbers [SOURCE X] for every fact or claim you make.
 
-                USER QUESTION:
-                {user_query}
+            USER QUESTION:
+            {user_query}
 
-                SEC 10-K CONTEXT:
-                {context_str}
-                """
+            SEC 10-K CONTEXT:
+            {context_str}
+            """
 
-                # 4. Stream LLM Response using Databricks Foundation Model Serving
-                try:                   
-                    llm_answer = query_databricks_llm(prompt)
+            # 4. Stream LLM Response using Databricks Foundation Model Serving
+            try:                   
+                llm_answer, reasoning = query_databricks_llm(prompt)
+                reasoning_text = "\n".join(reasoning) if reasoning else "No reasoning available."
+                with st.chat_message("assistant"):
                     st.markdown(llm_answer)
                     # 5. Render Expandable Sources & FinBERT Metrics
-                    with st.expander("Inspect Retrieved Evidence & FinBERT Sentiment Analysis"):
+                    with st.expander("Show reasoning and retrieved evidence."):
+                        st.caption(reasoning_text)
                         for doc in structured_docs:
                             col1, col2 = st.columns([3, 1])
                             with col1:
@@ -219,10 +239,10 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
                                 )
                             st.divider()
                     # Save response to chat history
-                    st.session_state.messages.append({
-                        "role": "assistant", 
-                        "content": llm_answer,
-                        "retrieved_docs": structured_docs
-                    })
-                except Exception as e:
-                    st.error(f"Failed to query LLM Endpoint '{LLM_ENDPOINT}': {str(e)}")
+                st.session_state.messages.append({
+                    "role": "assistant", 
+                    "content": llm_answer,
+                    "retrieved_docs": structured_docs
+                })
+            except Exception as e:
+                st.error(f"Failed to query LLM Endpoint '{LLM_ENDPOINT}': {str(e)}")
