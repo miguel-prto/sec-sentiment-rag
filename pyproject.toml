@@ -2,33 +2,34 @@
 name = "sec_sentiment_rag"
 version = "0.0.1"
 authors = [{ name = "miguel-prto" }]
-requires-python = ">=3.10,<3.13"
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "python-dotenv>=1.0",
     "beautifulsoup4>=4.12",
     "regex>=2024.11.6",
-    # Any dependencies for jobs and pipelines in this project can be added here
-    # See also https://docs.databricks.com/dev-tools/bundles/library-dependencies
-    #
-    # LIMITATION: for pipelines, dependencies are cached during development;
-    # add dependencies to the 'environment' section of your pipeline.yml file instead
+    "databricks-ai-search>=0.78",
+    "databricks-sdk>=0.144.0",
+    "pandas>=2.3",
+    "requests>=2.34.2",
+    "sentence-transformers>=6.1.0",
+    "streamlit>=1.64.0",
+    "torch>=2.14.0",
+    "transformers>=5.17.0",
 ]
 
 [dependency-groups]
 dev = [
     "pytest",
     "ruff",
-    "databricks-dlt",
-    "databricks-connect==16.1.7",
     "ipykernel",
 ]
 
-[project.scripts]
-main = "sec_sentiment_rag.main:main"
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+databricks = [
+    "databricks-connect==16.1.7",
+]
 
 [tool.ruff]
 line-length = 120
+
+[tool.uv]
+package = false

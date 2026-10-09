@@ -1,10 +1,11 @@
 import os
+
+import requests
 import streamlit as st
-from dotenv import load_dotenv
 from databricks.ai_search.client import VectorSearchClient
 from databricks.sdk import WorkspaceClient
+from dotenv import load_dotenv
 from sentence_transformers import SentenceTransformer
-import requests
 
 load_dotenv()
 
@@ -34,18 +35,22 @@ w = get_workspace_client()
 def get_merged_window_sql(accession: str, center_idx: int) -> str:
     min_idx = max(0, center_idx - 1)
     max_idx = center_idx + 1
+    warehouse_id = os.getenv("DATABRICKS_SQL_WAREHOUSE_ID")
+    if not warehouse_id:
+        raise RuntimeError("Set DATABRICKS_SQL_WAREHOUSE_ID in .env before querying Databricks.")
+    escaped_accession = accession.replace("'", "''")
     
     query = f"""
         SELECT chunk_text 
-        FROM financial_db.default.sec_rag_gold 
-        WHERE accession_number = '{accession}' 
+        FROM {GOLD_TABLE}
+        WHERE accession_number = '{escaped_accession}'
           AND chunk_index BETWEEN {min_idx} AND {max_idx}
         ORDER BY chunk_index ASC
     """
 
     response = w.statement_execution.execute_statement(
         statement=query,
-        warehouse_id=os.getenv("DATABRICKS_SQL_WAREHOUSE_ID")
+        warehouse_id=warehouse_id
     )
     
     rows = response.result.data_array if response.result else []
@@ -53,9 +58,11 @@ def get_merged_window_sql(accession: str, center_idx: int) -> str:
     
     return " ".join(clean_chunks)
 
-def query_databricks_llm(prompt: str) -> str:
-    host = os.getenv("DATABRICKS_HOST").rstrip("/")
+def query_databricks_llm(prompt: str) -> tuple[str, list[str]]:
+    host = os.getenv("DATABRICKS_HOST", "").rstrip("/")
     token = os.getenv("DATABRICKS_TOKEN")
+    if not host or not token:
+        raise RuntimeError("Set DATABRICKS_HOST and DATABRICKS_TOKEN in .env before querying the model endpoint.")
     
     url = f"{host}/serving-endpoints/{LLM_ENDPOINT}/invocations"
     headers = {
@@ -70,7 +77,7 @@ def query_databricks_llm(prompt: str) -> str:
         "temperature": 0.1
     }
     
-    resp = requests.post(url, headers=headers, json=payload)
+    resp = requests.post(url, headers=headers, json=payload, timeout=60)
     resp.raise_for_status()
     data = resp.json()
     
@@ -259,5 +266,5 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
                     "reasoning": reasoning_text,
                     "retrieved_docs": structured_docs
                 })
-            except Exception as e:
-                st.error(f"Failed to query LLM Endpoint '{LLM_ENDPOINT}': {str(e)}")
+            except (requests.RequestException, RuntimeError, KeyError, IndexError, TypeError) as e:
+                st.error(f"Failed to query LLM Endpoint '{LLM_ENDPOINT}': {e!s}")

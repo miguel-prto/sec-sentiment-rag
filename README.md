@@ -1,153 +1,77 @@
-SEC 10-K Financial Intelligence & Sentiment RAG Pipeline
+# SEC 10-K Sentiment RAG
 
-A Retrieval-Augmented Generation (RAG) pipeline and financial intelligence dashboard designed to process, analyze, and query SEC 10-K filings.
+A Databricks-backed retrieval-augmented generation (RAG) demo for SEC 10-K filings. The notebooks ingest filings, extract and chunk risk-factor text, calculate FinBERT sentiment, and create embeddings for Databricks Vector Search. The Streamlit app retrieves relevant chunks and asks a Databricks model-serving endpoint to answer questions with filing citations.
 
-The system leverages a Medallion Data Lakehouse Architecture on Databricks, combining specialized FinBERT sentiment analysis, Databricks Vector Search, continuous Window Context Expansion, and Llama-3-70B via Databricks Foundation Model Serving. It features an interactive Streamlit frontend optimized for lightweight, low-cost serverless execution.
+This project is an educational/demo application, not investment advice. Model output can be incorrect; verify answers against the cited filings.
 
-🌟 Key Features
+## Project contents
 
-Medallion Data Architecture (Bronze $\rightarrow$ Silver $\rightarrow$ Gold):
+- `src/notebooks/01_ingest_sec.ipynb` downloads SEC filing data into a Bronze Delta table.
+- `src/notebooks/02_parse_clean.ipynb` extracts and chunks filing text into a Silver table.
+- `src/notebooks/03_sentiment_rag.ipynb` scores sentiment, creates embeddings, and prepares the Gold table and Vector Search index.
+- `src/notebooks/app.py` is the Streamlit interface.
+- `pyproject.toml` declares project and development dependencies; `uv.lock` pins the resolved environment.
+- `.env.example` documents the local configuration variables. It contains placeholders only.
 
-Bronze: Ingestion of raw SEC 10-K text filings and metadata.
+## Prerequisites
 
-Silver: Cleaned, standardized text broken down into structured chunks (~1,000 characters with overlapping boundaries) with assigned positional index tracking.
+- Python 3.12
+- [uv](https://docs.astral.sh/uv/)
+- A Databricks workspace with permission to use Databricks Connect, a SQL warehouse, Vector Search, and a model-serving endpoint
+- A valid SEC User-Agent that includes a contact email address
 
-Gold: Enrichment with FinBERT financial sentiment scores (Positive, Negative, Neutral) and BGE embeddings, optimized for Databricks Vector Search.
+The notebooks create/use the `financial_db.filings` catalog and schema. The app's expected table, Vector Search endpoint/index, and model endpoint are configured near the top of `src/notebooks/app.py`; adjust those constants if your workspace uses different names.
 
-Smart Context Expansion (Window Retrieval):
+## Local setup
 
-Solves sentence fragmentation from arbitrary character splits by retrieving adjacent chunks ($\pm 1$ position).
-
-Concatenates neighboring chunks using a single space (" ") rather than double line breaks ("\n\n"), ensuring uninterrupted grammatical continuity for the LLM.
-
-FinBERT Sentiment Analysis Integration:
-
-Calculates financial sentiment scores directly in the data pipeline to provide contextual risk metrics alongside vector search results.
-
-Serverless Lightweight Frontend Architecture:
-
-Replaces heavy PySpark Connect sessions with the Databricks SDK (WorkspaceClient) and SQL Statement Execution API over a Serverless SQL Warehouse.
-
-Prevents DENY_NEW_AND_EXISTING_RESOURCES runtime errors and budget caps while delivering sub-second context retrieval.
-
-Foundation Model Integration:
-
-Utilizes databricks-meta-llama-3-70b-instruct through Databricks Serving Endpoints for accurate financial insights grounded in SEC filings.
-
-📐 System Architecture
-
-                       ┌───────────────────────────────────────────────┐
-                       │          SEC 10-K Raw Filings (JSON)          │
-                       └───────────────────────┬───────────────────────┘
-                                               │
-                                               ▼
-                      ┌─────────────────────────────────────────────────┐
-                      │     BRONZE: Ingestion & Raw Text Extraction     │
-                      └────────────────────────┬────────────────────────┘
-                                               │
-                                               ▼
-                      ┌─────────────────────────────────────────────────┐
-                      │  SILVER: Text Cleaning & Positional Chunking    │
-                      │  (~1,000 chars/chunk + overlap + chunk_index)   │
-                      └────────────────────────┬────────────────────────┘
-                                               │
-                                               ▼
-                      ┌─────────────────────────────────────────────────┐
-                      │    GOLD: FinBERT Sentiment UDF Enrichment       │
-                      │      (Pos, Neg, Label) + Delta Lake Table       │
-                      └────────────────────────┬────────────────────────┘
-                                               │
-                                               ▼
-                      ┌─────────────────────────────────────────────────┐
-                      │            Databricks Vector Search             │
-                      │          (BGE Embeddings Indexing)              │
-                      └────────────────────────┬────────────────────────┘
-                                               │
-                                               ▼
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│ Streamlit Application (Lightweight Architecture)                                        │
-│                                                                                         │
-│  1. Vector Similarity Search ──► Retrieves Top Match (Accession + Chunk Index)          │
-│  2. Window Retrieval Expansion  ──► SQL Statement Execution API over Serverless Warehouse│
-│                                     Fetches adjacent chunks (idx - 1, idx, idx + 1)     │
-│  3. Single-Space Merging        ──► Reconstructs unbroken narrative context              │
-│  4. Llama 3 Serving Endpoint    ──► Generates financial answer with sentiment metrics   │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-
-
-🛠️ Project Structure
-
-sec_sentiment_rag/
-├── src/
-│   ├── notebooks/
-│   │   ├── 01_bronze_to_silver.py     # Data ingestion and chunking logic
-│   │   ├── 02_silver_to_gold.py       # FinBERT UDF application & Gold table setup
-│   │   ├── 03_vector_search_index.py  # Databricks Vector Search index creation
-│   │   └── app.py                     # Streamlit web interface
-├── .env.example                       # Environment variables template
-├── requirements.txt                   # Project dependencies
-└── README.md                          # Documentation
-
-
-⚙️ Environment & Configuration
-
-Create a .env file in the project root containing your workspace configuration:
-
-## Databricks Variables
-DATABRICKS_HOST="https://<your-workspace-url>.cloud.databricks.com"
-DATABRICKS_TOKEN="dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-
-DATABRICKS_SQL_WAREHOUSE_ID="a1b2c3d4e5f67890"  # 16-character Serverless SQL Warehouse ID
-
-
-🚀 Installation & Setup
-
-Clone the repository and install dependencies:
-
+```powershell
 git clone https://github.com/miguel-prto/sec-sentiment-rag.git
 cd sec-sentiment-rag
-uv pip install -r requirements.txt
+uv sync
+Copy-Item .env.example .env
+```
 
+Edit `.env` and provide your own values:
 
-Run Pipeline Notebooks on Databricks:
+- `SEC_USER_AGENT`: application name and a contact email, as required for SEC requests.
+- `DATABRICKS_HOST`: your workspace URL.
+- `DATABRICKS_TOKEN`: a Databricks token authorized for the required resources.
+- `DATABRICKS_SQL_WAREHOUSE_ID`: the SQL warehouse ID used for context retrieval.
 
-Execute 01_bronze_to_silver.py to ingest and chunk 10-K filings.
+Never commit `.env`, tokens, or other credentials. `.env` and Streamlit secrets files are ignored by Git; use `.env.example` for safe placeholders.
 
-Execute 02_silver_to_gold.py to attach FinBERT sentiment metadata.
+To run the notebooks from a local Jupyter/VS Code kernel, install their Databricks Connect dependencies too:
 
-Execute 03_vector_search_index.py to sync the Delta Table with the Vector Search Index.
+```powershell
+uv sync --group databricks
+```
 
-Obtain Serverless SQL Warehouse ID:
+## Run the notebooks
 
-Go to SQL Warehouses $\rightarrow$ Select your Serverless Warehouse $\rightarrow$ Connection Details.
+Run the notebooks in order, using the Databricks Connect environment:
 
-Copy the 16-character ID from the HTTP Path (/sql/1.0/warehouses/<WAREHOUSE_ID>) and set DATABRICKS_SQL_WAREHOUSE_ID in .env.
+1. `01_ingest_sec.ipynb`
+2. `02_parse_clean.ipynb`
+3. `03_sentiment_rag.ipynb`
 
-Launch the Streamlit App:
+Each notebook uses Databricks resources and writes Delta tables. The final notebook creates or updates the Vector Search index; ensure the app's configured endpoint and index names match your workspace.
 
-streamlit run src/notebooks/app.py
+## Run the app
 
+After the tables and Vector Search index are ready, start Streamlit:
 
-💡 Key Lessons Learned & Technical Solutions
+```powershell
+uv run streamlit run src/notebooks/app.py
+```
 
-1. Eliminating PySpark Runtime Budget Lockouts
+The app uses `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, and `DATABRICKS_SQL_WAREHOUSE_ID` from `.env`. It also calls the Vector Search and model-serving resources named in `app.py`; the signed-in identity must be authorized to access them.
 
-Issue: Instantiating DatabricksSession.builder.getOrCreate() inside Streamlit triggered pyspark.errors.exceptions.connect.UnknownException: (DENY_NEW_AND_EXISTING_RESOURCES) BAD_REQUEST when hitting workspace resource quotas or auto-scaling limits.
+## Dependencies
 
-Solution: Removed PySpark dependencies from the Streamlit frontend. Used WorkspaceClient() from databricks-sdk with w.statement_execution.execute_statement(...) against a Serverless SQL Warehouse to execute lightweight batch SQL queries in milliseconds.
+Runtime dependencies are declared in `pyproject.toml`; `uv.lock` records exact resolutions. Development tools are in the `dev` group. Databricks Connect, required when running the notebooks locally, is in the optional `databricks` group and can be installed with `uv sync --group databricks`.
 
-2. Grammatical Continuity in Character-Based Chunking
+Do not edit `uv.lock` manually. After changing dependencies in `pyproject.toml`, run `uv lock`.
 
-Issue: Strict character-count chunking cuts off mid-sentence. Concatenating chunks with double line breaks (\n\n) creates artificial paragraph breaks in the middle of sentences.
+## License
 
-Solution: Cleaned boundary spaces with .strip() and joined window sequences with a single space (" "), presenting a smooth, uninterrupted block of text to Llama-3.
-
-3. Vector Search Metadata Unpacking
-
-Issue: databricks-vectorsearch appends similarity scores to returned rows, turning an 8-column query into a 9-element array and causing ValueError: too many values to unpack.
-
-Solution: Explicitly sliced the returned array using doc[:8] to decouple record reading from trailing score fields.
-
-📜 License
-
-This project is licensed under the MIT License.
+No license file is currently included. Until a license is chosen and added, do not assume the project is licensed for reuse or redistribution.

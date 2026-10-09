@@ -4,6 +4,9 @@ dist/
 __pycache__/
 *.egg-info
 .venv/
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
 scratch/**
 !scratch/README.md
 **/explorations/**
@@ -12,3 +15,4 @@ scratch/**
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
