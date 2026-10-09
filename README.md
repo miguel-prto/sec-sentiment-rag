@@ -93,24 +93,20 @@ sec_sentiment_rag/
 
 Create a .env file in the project root containing your workspace configuration:
 
-# Databricks Credentials
+## Databricks Variables
 DATABRICKS_HOST="https://<your-workspace-url>.cloud.databricks.com"
 DATABRICKS_TOKEN="dapiXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
 
-# Compute & Serving Resources
 DATABRICKS_SQL_WAREHOUSE_ID="a1b2c3d4e5f67890"  # 16-character Serverless SQL Warehouse ID
-LLM_ENDPOINT="databricks-meta-llama-3-70b-instruct"
-VECTOR_SEARCH_ENDPOINT_NAME="sec_rag_vs_endpoint"
-VECTOR_INDEX_NAME="financial_db.default.sec_rag_gold_index"
 
 
 🚀 Installation & Setup
 
 Clone the repository and install dependencies:
 
-git clone https://github.com/your-repo/sec-sentiment-rag.git
+git clone https://github.com/miguel-prto/sec-sentiment-rag.git
 cd sec-sentiment-rag
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 
 
 Run Pipeline Notebooks on Databricks:

@@ -128,10 +128,24 @@ if "messages" not in st.session_state:
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
-        if "retrieved_docs" in msg:
-            with st.expander("View Retrieved 10-K Sources & FinBERT Scores"):
+        
+        if msg.get("retrieved_docs"):
+            with st.expander("Show reasoning and retrieved evidence"):
+                if msg.get("reasoning"):
+                    st.caption(msg["reasoning"])
+                
                 for doc in msg["retrieved_docs"]:
-                    st.json(doc)
+                    col1, col2 = st.columns([3, 1])
+                    with col1:
+                        st.markdown(f"**Source [{doc['source_num']}] — Ticker: {doc['ticker']} ({doc['date']})**")
+                        st.caption(doc["excerpt"])
+                    with col2:
+                        st.metric(
+                            label="FinBERT Label", 
+                            value=doc["sentiment"].upper(),
+                            delta=f"-{doc['negative_probability']*100:.1f}% Neg Risk" if doc["sentiment"] == "negative" else "Normal"
+                        )
+                    st.divider()
 
 # User input
 if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., foreign exchange risks, supply chain delays)..."):
@@ -242,6 +256,7 @@ if user_query := st.chat_input("Ask a question about 10-K Risk Factors (e.g., fo
                 st.session_state.messages.append({
                     "role": "assistant", 
                     "content": llm_answer,
+                    "reasoning": reasoning_text,
                     "retrieved_docs": structured_docs
                 })
             except Exception as e:
