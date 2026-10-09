@@ -9,7 +9,7 @@ This project is an educational/demo application, not investment advice. Model ou
 - `src/notebooks/01_ingest_sec.ipynb` downloads SEC filing data into a Bronze Delta table.
 - `src/notebooks/02_parse_clean.ipynb` extracts and chunks filing text into a Silver table.
 - `src/notebooks/03_sentiment_rag.ipynb` scores sentiment, creates embeddings, and prepares the Gold table and Vector Search index.
-- `src/notebooks/app.py` is the Streamlit interface.
+- `src/app.py` is the Streamlit interface.
 - `pyproject.toml` declares project and development dependencies; `uv.lock` pins the resolved environment.
 - `.env.example` documents the local configuration variables. It contains placeholders only.
 
@@ -20,7 +20,7 @@ This project is an educational/demo application, not investment advice. Model ou
 - A Databricks workspace with permission to use Databricks Connect, a SQL warehouse, Vector Search, and a model-serving endpoint
 - A valid SEC User-Agent that includes a contact email address
 
-The notebooks create/use the `financial_db.filings` catalog and schema. The app's expected table, Vector Search endpoint/index, and model endpoint are configured near the top of `src/notebooks/app.py`; adjust those constants if your workspace uses different names.
+The notebooks create/use the `financial_db.filings` catalog and schema. The app's expected table, Vector Search endpoint/index, and model endpoint are configured near the top of `src/app.py`; adjust those constants if your workspace uses different names.
 
 ## Local setup
 
@@ -61,10 +61,10 @@ Each notebook uses Databricks resources and writes Delta tables. The final noteb
 After the tables and Vector Search index are ready, start Streamlit:
 
 ```powershell
-uv run streamlit run src/notebooks/app.py
+uv run streamlit run src/app.py
 ```
 
-The app uses `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, and `DATABRICKS_SQL_WAREHOUSE_ID` from `.env`. It also calls the Vector Search and model-serving resources named in `app.py`; the signed-in identity must be authorized to access them.
+The app uses `DATABRICKS_HOST`, `DATABRICKS_TOKEN`, and `DATABRICKS_SQL_WAREHOUSE_ID` from `.env`. It also calls the Vector Search and model-serving resources named in `app.py`; the signed-in identity must be authorized to access them. When running the notebooks locally, ensure `SEC_USER_AGENT` is available in the notebook kernel's environment.
 
 ## Dependencies
 

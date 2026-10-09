@@ -86,7 +86,9 @@ def query_databricks_llm(prompt: str) -> tuple[str, list[str]]:
     text = ""
     reasoning = []
 
-    if isinstance(message_content, list):
+    if isinstance(message_content, str):
+        text = message_content
+    elif isinstance(message_content, list):
         for block in message_content:
             if block.get("type") == "text":
                 text += block.get("text", "")
